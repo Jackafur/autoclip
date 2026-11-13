@@ -1,0 +1,9 @@
+[Unit]
+Description=WoW AutoClip: a .tga in WoW's Screenshots asks OBS to save the last 2 minutes
+
+[Path]
+# Change this to your own WoW Screenshots folder (systemd .path units don't expand ~ or %h).
+PathChanged=/home/YOURUSER/Games/battlenet/drive_c/Program Files (x86)/World of Warcraft/_forever_/Screenshots
+
+[Install]
+WantedBy=default.target

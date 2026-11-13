@@ -1,0 +1,9 @@
+## Interface: 16001
+## Title: AutoClip
+## Notes: Saves the last 2 minutes in OBS on a PvP killing blow, level up, boss kill or death (Linux PC). /autoclip
+## Author: Jackafur
+## Version: 1.0
+## IconTexture: Interface\AddOns\AutoClip\icon.tga
+## SavedVariables: AutoClipDB
+
+AutoClip.lua

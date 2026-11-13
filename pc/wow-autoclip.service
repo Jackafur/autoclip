@@ -1,0 +1,6 @@
+[Unit]
+Description=WoW AutoClip: save the OBS instant replay into ~/Videos/OBS/Auto
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/obs-record auto

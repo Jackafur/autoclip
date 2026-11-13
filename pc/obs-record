@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""OBS on keys (talks to OBS over its local websocket, password in
+~/.config/obs-studio/websocket-password). A notification says what happened.
+
+  obs-record             Win + R: start or stop a recording (OBS closed: start it in the tray, recording)
+  obs-record clip        Win + C: save the last 2 minutes (instant replay); off: turn it on
+  obs-record mark        Win + M: chapter marker in the running recording
+  obs-record buffer-on   Battle.net starts (Lutris): instant replay on
+  obs-record buffer-off  Battle.net closes (Lutris): instant replay off
+  obs-record auto        the WoW AutoClip watcher (wow-autoclip.path): two screenshots 1.5 s apart
+                         from WoW's addon: move them aside, save the replay into ~/Videos/OBS/Auto,
+                         keep that folder under AUTO_CAP_GB (oldest go first)
+
+Setup: see AutoClip's README.
+"""
+import base64, glob, hashlib, json, os, socket, struct, subprocess, sys, time
+
+HOST, PORT = "127.0.0.1", 4455
+PWFILE = os.path.expanduser("~/.config/obs-studio/websocket-password")
+AUTO_DIR = os.path.expanduser("~/Videos/OBS/Auto")
+AUTO_CAP_GB = 50
+SHOT_DIR = os.path.expanduser("~/Games/battlenet/drive_c/Program Files (x86)/World of Warcraft/_forever_/Screenshots")
+OBS_ARGS = ["obs", "--profile", "Recording", "--collection", "Recording",
+            "--minimize-to-tray", "--disable-missing-files-check"]
+
+
+def notify(text):
+    subprocess.run(["notify-send", "-a", "OBS", "-i", "com.obsproject.Studio",
+                    "-t", "2500", "-h", "string:x-canonical-private-synchronous:obs-record",
+                    text], check=False)
+
+
+class WS:
+    def __init__(self):
+        self.s = socket.create_connection((HOST, PORT), timeout=3)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.s.sendall((f"GET / HTTP/1.1\r\nHost: {HOST}:{PORT}\r\nUpgrade: websocket\r\n"
+                        f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: obswebsocket.json\r\n\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = self.s.recv(1024)
+            if not chunk:
+                raise ConnectionError("handshake closed")
+            head += chunk
+        if b" 101 " not in head.split(b"\r\n")[0]:
+            raise ConnectionError("handshake refused")
+        self.buf = head.split(b"\r\n\r\n", 1)[1]
+
+    def _read(self, n):
+        while len(self.buf) < n:
+            chunk = self.s.recv(65536)
+            if not chunk:
+                raise ConnectionError("closed")
+            self.buf += chunk
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def recv(self):
+        while True:
+            b1, b2 = self._read(2)
+            n = b2 & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self._read(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self._read(8))[0]
+            data = self._read(n)
+            if b1 & 0x0F == 1:
+                return json.loads(data)
+
+    def send(self, obj):
+        data = json.dumps(obj).encode()
+        mask = os.urandom(4)
+        n = len(data)
+        head = bytes([0x81])
+        if n < 126:
+            head += bytes([0x80 | n])
+        elif n < 65536:
+            head += bytes([0x80 | 126]) + struct.pack(">H", n)
+        else:
+            head += bytes([0x80 | 127]) + struct.pack(">Q", n)
+        self.s.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+    def request(self, rtype, data=None):
+        d = {"requestType": rtype, "requestId": rtype}
+        if data:
+            d["requestData"] = data
+        self.send({"op": 6, "d": d})
+        while True:
+            m = self.recv()
+            if m.get("op") == 7 and m["d"].get("requestId") == rtype:
+                return m["d"]
+
+    def wait_event(self, etype, timeout):
+        self.s.settimeout(timeout)
+        end = time.time() + timeout
+        while time.time() < end:
+            m = self.recv()
+            if m.get("op") == 5 and m["d"].get("eventType") == etype:
+                return m["d"].get("eventData") or {}
+        return None
+
+
+def connect(events=0):
+    ws = WS()
+    hello = ws.recv()["d"]
+    ident = {"rpcVersion": 1, "eventSubscriptions": events}
+    auth = hello.get("authentication")
+    if auth:
+        pw = open(PWFILE).read().strip()
+        secret = base64.b64encode(hashlib.sha256((pw + auth["salt"]).encode()).digest()).decode()
+        ident["authentication"] = base64.b64encode(
+            hashlib.sha256((secret + auth["challenge"]).encode()).digest()).decode()
+    ws.send({"op": 1, "d": ident})
+    if ws.recv().get("op") != 2:
+        raise ConnectionError("not identified")
+    return ws
+
+
+def obs_running():
+    return subprocess.run(["pgrep", "-x", "obs"], capture_output=True).returncode == 0
+
+
+def start_obs(flag):
+    subprocess.run(["systemd-run", "--user", "--collect", "--quiet", "--unit=obs-studio",
+                    *OBS_ARGS, flag], check=False)
+
+
+def wait_until(check):
+    """Poll OBS for up to 20 s after starting it, until check(ws) is true."""
+    for _ in range(40):
+        time.sleep(0.5)
+        try:
+            if check(connect()):
+                return True
+        except (OSError, ConnectionError, KeyError, ValueError):
+            pass
+    return False
+
+
+def ok(r):
+    return r["requestStatus"].get("result"), r["requestStatus"].get("comment", "unknown")
+
+
+def buffer_active(ws):
+    return ws.request("GetReplayBufferStatus")["responseData"]["outputActive"]
+
+
+def must_connect():
+    try:
+        return connect()
+    except (OSError, ConnectionError, ValueError) as e:
+        notify(f"Can't reach OBS ({e}). Open it from the tray.")
+        sys.exit(1)
+
+
+def toggle_record():
+    if not obs_running():
+        start_obs("--startrecording")
+        if wait_until(lambda ws: ws.request("GetRecordStatus")["responseData"]["outputActive"]):
+            notify("● Recording")
+        else:
+            notify("OBS started but isn't recording. Open it from the tray to see why.")
+        return
+    ws = must_connect()
+    if ws.request("GetRecordStatus")["responseData"]["outputActive"]:
+        r = ws.request("StopRecord")
+        path = (r.get("responseData") or {}).get("outputPath", "")
+        notify("■ Recording saved" + (f": {os.path.basename(path)}" if path else ""))
+    else:
+        good, why = ok(ws.request("StartRecord"))
+        notify("● Recording" if good else f"Couldn't start: {why}")
+
+
+def buffer_on(quiet=False):
+    """Returns True if instant replay was already running."""
+    if not obs_running():
+        start_obs("--startreplaybuffer")
+        if wait_until(buffer_active):
+            notify("Instant replay on: Win + C saves the last 2 minutes")
+        else:
+            notify("OBS started but instant replay isn't on. Open it from the tray to see why.")
+        return False
+    ws = must_connect()
+    if buffer_active(ws):
+        return True
+    good, why = ok(ws.request("StartReplayBuffer"))
+    if not quiet or not good:
+        notify("Instant replay on: Win + C saves the last 2 minutes" if good
+               else f"Couldn't turn instant replay on: {why}")
+    return False
+
+
+def buffer_off():
+    if not obs_running():
+        return
+    ws = must_connect()
+    if buffer_active(ws):
+        ws.request("StopReplayBuffer")
+
+
+def save_replay(ws):
+    """Save the buffer; return the new file's path (None if OBS didn't say in 30 s)."""
+    good, why = ok(ws.request("SaveReplayBuffer"))
+    if not good:
+        notify(f"Couldn't save the clip: {why}")
+        return None
+    try:
+        ev = ws.wait_event("ReplayBufferSaved", 30)
+    except (OSError, ConnectionError):
+        ev = None
+    return (ev or {}).get("savedReplayPath")
+
+
+def clip():
+    if not obs_running():
+        buffer_on()
+        return
+    ws = connect(events=64)  # 64 = Outputs events (ReplayBufferSaved)
+    if not buffer_active(ws):
+        buffer_on()
+        return
+    path = save_replay(ws)
+    if path:
+        notify(f"Clip saved (last 2 min): {os.path.basename(path)}")
+
+
+def mark():
+    if not obs_running():
+        notify("Not recording: Win + R first, then Win + M marks")
+        return
+    ws = must_connect()
+    if not ws.request("GetRecordStatus")["responseData"]["outputActive"]:
+        notify("Not recording: Win + R first, then Win + M marks")
+        return
+    good, why = ok(ws.request("CreateRecordChapter"))
+    notify("◆ Marked" if good else f"Couldn't mark: {why}")
+
+
+def cull():
+    files = sorted((os.path.join(AUTO_DIR, f) for f in os.listdir(AUTO_DIR) if f.startswith("Auto ")),
+                   key=os.path.getmtime)
+    total = sum(os.path.getsize(f) for f in files)
+    while files and total > AUTO_CAP_GB * 1024 ** 3:
+        f = files.pop(0)
+        total -= os.path.getsize(f)
+        os.remove(f)
+
+
+def marker_pair():
+    """WoW's AutoClip takes two screenshots 1.5 s apart; your own come one at a time.
+    Returns the pair (newest two, 0.8 to 3 s apart, made in the last 10 s) or None."""
+    shots = [f for ext in ("jpg", "tga", "png") for f in glob.glob(os.path.join(SHOT_DIR, "*." + ext))]
+    recent = sorted((f for f in shots if time.time() - os.path.getmtime(f) < 10), key=os.path.getmtime)
+    if len(recent) >= 2:
+        a, b = recent[-2:]
+        if 0.8 <= os.path.getmtime(b) - os.path.getmtime(a) <= 3:
+            return a, b
+    return None
+
+
+def auto():
+    pair = marker_pair()
+    if not pair:
+        time.sleep(3)  # the second shot of a pair may still be coming
+        pair = marker_pair()
+    if not pair:
+        return
+    # Moved aside, not deleted, in case one was yours: the last 6 stay in ~/.cache/wow-autoclip.
+    keep = os.path.expanduser("~/.cache/wow-autoclip")
+    os.makedirs(keep, exist_ok=True)
+    for f in pair:
+        os.replace(f, os.path.join(keep, os.path.basename(f)))
+    for f in sorted(glob.glob(os.path.join(keep, "*")), key=os.path.getmtime)[:-6]:
+        os.remove(f)
+    if not obs_running():
+        notify("WoW asked for a clip, but OBS isn't running (Win + C turns instant replay on)")
+        return
+    ws = connect(events=64)
+    if not buffer_active(ws):
+        notify("WoW asked for a clip, but instant replay is off (Win + C turns it on)")
+        return
+    path = save_replay(ws)
+    if not path:
+        return
+    os.makedirs(AUTO_DIR, exist_ok=True)
+    name = "Auto " + os.path.basename(path).split(" ", 1)[-1]
+    os.replace(path, os.path.join(AUTO_DIR, name))
+    cull()
+    notify(f"WoW clip saved: {name}")
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "record"
+    {"record": toggle_record, "clip": clip, "mark": mark, "buffer-on": buffer_on,
+     "buffer-off": buffer_off, "auto": auto}[cmd]()
+
+
+if __name__ == "__main__":
+    main()
