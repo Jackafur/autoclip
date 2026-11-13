@@ -1,5 +1,7 @@
 # AutoClip
 
+<img src="assets/icon.png" alt="AutoClip icon" width="128" align="right">
+
 Saves the last 2 minutes of WoW in OBS when something worth keeping happens: a PvP killing blow by you or your pet, a
 level up, a boss kill, or (off by default) your own death. Made for one Linux PC (CachyOS, KDE,
 WoW under Lutris, OBS 30+ with instant replay and its websocket on); tested on that setup only.
