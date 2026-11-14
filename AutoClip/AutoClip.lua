@@ -6,7 +6,7 @@
 -- Setup: see the README.
 
 local DEFAULTS = { pvp = true, level = true, boss = true, death = false }
-local LABELS = { pvp = "PvP killing blow (you or your pet)", level = "level up", boss = "boss kill", death = "your death" }
+local LABELS = { pvp = "PvP kill (an honorable kill, or your killing blow on a player)", level = "level up", boss = "boss kill", death = "your death" }
 local ORDER = { "pvp", "level", "boss", "death" }
 local AFTER = 8 -- seconds to wait after the moment, so the clip shows what came right after
 
@@ -31,6 +31,10 @@ end
 
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PARTY_KILL") -- not COMBAT_LOG_EVENT_UNFILTERED: restricted in this client, the load popup (Nov 12)
+-- PARTY_KILL's GUIDs are secret when unit identity is restricted (the API docs), which is just when the victim is an enemy
+-- player, so it missed his PvP kills (Nov 13). The honorable kill count is not secret: a change of the player's = a PvP kill
+-- he had a hand in (a kill worth honor; a grey-level player gives none).
+f:RegisterEvent("PLAYER_PVP_KILLS_CHANGED")
 f:RegisterEvent("PLAYER_LEVEL_UP")
 f:RegisterEvent("ENCOUNTER_END")
 f:RegisterEvent("PLAYER_DEAD")
@@ -45,6 +49,10 @@ f:SetScript("OnEvent", function(_, event, ...)
             return (src == UnitGUID("player") or src == UnitGUID("pet")) and dest:sub(1, 7) == "Player-"
         end)
         if ok and mine then want("pvp") end
+    elseif event == "PLAYER_PVP_KILLS_CHANGED" then
+        local unit = ...
+        local ok, me = pcall(function() return unit == "player" end)
+        if ok and me then want("pvp") end
     elseif event == "PLAYER_LEVEL_UP" then
         want("level")
     elseif event == "ENCOUNTER_END" then

@@ -2,7 +2,7 @@
 
 <img src="assets/icon.png" alt="AutoClip icon" width="128" align="right">
 
-Saves the last 2 minutes of WoW in OBS when something worth keeping happens: a PvP killing blow by you or your pet, a
+Saves the last 2 minutes of WoW in OBS when something worth keeping happens: a PvP kill (an honorable kill), a
 level up, a boss kill, or (off by default) your own death. Made for one Linux PC (CachyOS, KDE,
 WoW under Lutris, OBS 30+ with instant replay and its websocket on); tested on that setup only.
 
@@ -20,7 +20,9 @@ WoW's Screenshots folder and runs `obs-record auto`: a pair like that (0.8 to 3 
 move to `~/.cache/wow-autoclip` (the last 6 kept), OBS saves its instant replay, and the clip lands in
 `~/Videos/OBS/Auto`, which rotates: past 50 GB the oldest go. Your own single screenshots are left alone.
 
-PvP kills come from the `PARTY_KILL` event. Not from the combat log: `COMBAT_LOG_EVENT_UNFILTERED` is restricted in this
+PvP kills come from `PLAYER_PVP_KILLS_CHANGED` (your honorable kill count went up), plus `PARTY_KILL` where its GUIDs
+are readable: they are secret values when unit identity is restricted, which is when the victim is an enemy player, so
+`PARTY_KILL` alone misses PvP kills. A grey-level player is no honorable kill and makes no clip. Not from the combat log: `COMBAT_LOG_EVENT_UNFILTERED` is restricted in this
 client, and registering it brings up "blocked from an action only available to the Blizzard UI" at every load. Also
 blocked here: changing the `screenshotFormat` CVar and muting "Screen captured" on `ActionStatus`. A refused call is
 printed in chat and kept in `AutoClipDB.blocked`.
