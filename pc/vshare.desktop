@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Service
+MimeType=video/mp4;video/x-matroska;video/quicktime;video/webm;
+Actions=vshare;vsharelink;vsharedown;
+X-KDE-Submenu=jackafur.com
+X-KDE-Priority=TopLevel
+
+[Desktop Action vshare]
+Name=Share
+Icon=emblem-shared-symbolic
+Exec=vshare share %F
+
+[Desktop Action vsharelink]
+Name=Copy link
+Icon=edit-copy
+Exec=vshare link %F
+
+[Desktop Action vsharedown]
+Name=Take down
+Icon=edit-delete-remote
+Exec=vshare down %F

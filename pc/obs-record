@@ -6,7 +6,8 @@
   obs-record clip        Win + C: save the last 2 minutes (instant replay); off: turn it on
   obs-record mark        Win + M: chapter marker in the running recording
   obs-record buffer-on   Battle.net starts (Lutris): instant replay on
-  obs-record buffer-off  Battle.net closes (Lutris): instant replay off
+  obs-record buffer-off  Battle.net closes (Lutris): instant replay off (skipped while Battle.net
+                         or WoW still runs: a second launch quits at once and must not turn it off)
   obs-record auto        the WoW AutoClip watcher (wow-autoclip.path): two screenshots 1.5 s apart
                          from WoW's addon: move them aside, save the replay into ~/Videos/OBS/Auto,
                          keep that folder under AUTO_CAP_GB (oldest go first)
@@ -191,8 +192,18 @@ def buffer_on(quiet=False):
     return False
 
 
+def game_running():
+    """Battle.net or WoW still up? Waits up to 3 s for them to finish closing."""
+    pat = "Battle[.]net[.]exe|Wow[.]exe"
+    for _ in range(6):
+        if subprocess.run(["pgrep", "-f", pat], capture_output=True).returncode != 0:
+            return False
+        time.sleep(0.5)
+    return True
+
+
 def buffer_off():
-    if not obs_running():
+    if not obs_running() or game_running():
         return
     ws = must_connect()
     if buffer_active(ws):
