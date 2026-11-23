@@ -76,7 +76,7 @@ buildIndex() {
         cards+="<li><a class=\"pic\" href=\"$id/\"><img src=\"$id/thumb.jpg\" alt=\"\"$( ((n >= 8)) && printf ' loading="lazy"')>${len:+<span class=\"len\">$len</span>}${hdr:+<span class=\"hdr\">HDR</span>}</a>"
         cards+="<div class=\"meta\"><a class=\"t\" href=\"$id/\">$title</a><span class=\"d\">$day</span><button data-link=\"$SITE/$id/\">Copy link</button></div></li>"$'\n'
         n=$((n + 1))
-    done < <(tac "$LOG")
+    done < <(sort -t $'\t' -k2,2r "$LOG")
     cat >"$page" <<EOF
 <!doctype html>
 <html lang="en">
@@ -177,7 +177,7 @@ PQ=(-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc)
 AUDIO=(-c:a aac -b:a 160k -movflags +faststart)
 
 share() {
-    local f=$1 name id dir title hdr w h sources="" from dest
+    local f=$1 name id dir title hdr w h sources="" from dest when
     name=$(basename "$f")
     if [[ -z ${VSHARE_ID:-} ]] && id=$(idOf "$f"); then
         printf '%s/%s/' "$SITE" "$id" | wl-copy >/dev/null 2>&1
@@ -193,9 +193,13 @@ share() {
 
     if [[ $hdr == smpte2084 ]]; then
         nice ffmpeg -v error -y "${VAAPI[@]}" -i "$f" -c:v av1_vaapi -rc_mode VBR -b:v 25M -maxrate 40M "${PQ[@]}" "${AUDIO[@]}" "$dir/hdr-av1.mp4" &&
-        nice ffmpeg -v error -y "${VAAPI[@]}" -i "$f" -c:v hevc_vaapi -profile:v main10 -tag:v hvc1 -rc_mode VBR -b:v 32M -maxrate 50M "${PQ[@]}" "${AUDIO[@]}" "$dir/hdr-hevc.mp4" &&
+        # HEVC on the CPU (x265): the RX 9070 XT's hevc_vaapi (Mesa 26.3) writes invalid cu_qp_delta values in every rate
+        # control mode, which played as green blocks in Firefox and could on older iPhones (Nov 23). About 1.7x the clip's length.
+        nice ffmpeg -v error -y -i "$f" -c:v libx265 -preset fast -crf 20 -pix_fmt yuv420p10le -tag:v hvc1 \
+            -x265-params "hdr10=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:vbv-maxrate=50000:vbv-bufsize=100000:log-level=error" \
+            "${PQ[@]}" "${AUDIO[@]}" "$dir/hdr-hevc.mp4" &&
         nice ffmpeg -v error -y -i "$f" \
-            -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=yuv420p" \
+            -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=yuv420p,sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA,sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL" \
             -c:v libx264 -preset faster -crf 18 -maxrate 35M -bufsize 70M "${AUDIO[@]}" "$dir/sdr.mp4" 2> >(grep -v 'radv is not a conformant' >&2) ||
             { say "Share failed: $name" "A copy didn't encode. Nothing was uploaded."; rm -rf "$dir"; return 1; }
         sources+="<source data-hdr media=\"(dynamic-range: high)\" src=\"hdr-av1.mp4\" type='video/mp4; codecs=\"$(printf 'av01.0.%02dM.10' "$(vlevel "$dir/hdr-av1.mp4")")\"'>"
@@ -287,8 +291,10 @@ EOF
             mv "$f" "$dest"
         fi
         setfattr -n user.vshare.id -v "$id" "$dest" 2>/dev/null
+        when=$(awk -F'\t' -v i="$id" '$1 == i { print $2 }' "$LOG" | tail -1)  # (a page redone with VSHARE_ID keeps its date)
+        [[ -n ${VSHARE_ID:-} && -n $when ]] || when=$(date '+%F %R')
         sed -i "/^$id"$'\t'"/d" "$LOG"
-        printf '%s\t%s\t%s\t%s\n' "$id" "$(date '+%F %R')" "$(basename "$dest")" "$from" >>"$LOG"
+        printf '%s\t%s\t%s\t%s\n' "$id" "$when" "$(basename "$dest")" "$from" >>"$LOG"
         rm -rf "$dir"
         say -t 15000 "Shared: $name" "$SITE/$id/  (on your clipboard). The video is in Videos/OBS/Shared now."
         echo "$SITE/$id/"
