@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Right-click an HDR clip in Dolphin, "Make SDR copy": writes "<name> (SDR).mp4" beside it, H.264 8-bit,
 # tone-mapped on the GPU (libplacebo), so Discord and phones show it right. The HDR original stays.
-# Service menu: ~/.local/share/kio/servicemenus/sdr-copy.desktop.
+# Service menu: ~/.local/share/kio/servicemenus/sdr-copy.desktop. All sound tracks are kept (track 1 plays).
 for f in "$@"; do
     name=$(basename "$f")
     if [[ $(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer -of default=nw=1:nk=1 "$f") != smpte2084 ]]; then
@@ -9,7 +9,8 @@ for f in "$@"; do
     fi
     out="${f%.*} (SDR).mp4"
     notify-send -a OBS -i com.obsproject.Studio -t 2500 "Making SDR copy: $name"
-    if nice ffmpeg -v error -y -i "$f" \
+    # -map: keep every sound track (OBS's 3 since Nov 21), so "without browser sound" still works on the copy
+    if nice ffmpeg -v error -y -i "$f" -map 0:v:0 -map 0:a? \
         -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=yuv420p" \
         -c:v libx264 -preset medium -crf 18 -c:a copy -movflags +faststart "$out"; then
         notify-send -a OBS -i com.obsproject.Studio "SDR copy done: $(basename "$out")"

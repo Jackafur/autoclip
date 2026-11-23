@@ -65,7 +65,7 @@ link)
         id=$(idOf "$f") || { say "Not shared: $(basename "$f")" "Right-click, jackafur.com, Share to put it online."; continue; }
         links+="$SITE/$id/"$'\n'
     done
-    [[ -n $links ]] && { printf '%s' "${links%$'\n'}" | wl-copy; say -t 6000 "Link copied" "${links%$'\n'}"; }
+    [[ -n $links ]] && { printf '%s' "${links%$'\n'}" | wl-copy >/dev/null 2>&1; say -t 6000 "Link copied" "${links%$'\n'}"; }
     exit 0 ;;
 down)
     shift
@@ -101,7 +101,7 @@ share() {
     local f=$1 name id dir title hdr w h sources="" from dest
     name=$(basename "$f")
     if [[ -z ${VSHARE_ID:-} ]] && id=$(idOf "$f"); then
-        printf '%s/%s/' "$SITE" "$id" | wl-copy
+        printf '%s/%s/' "$SITE" "$id" | wl-copy >/dev/null 2>&1
         say -t 8000 "Already shared: $name" "$SITE/$id/  (on your clipboard)"
         return 0
     fi
@@ -189,7 +189,7 @@ share() {
 EOF
     if rsync -r --chmod=D755,F644 "$dir/" "$HOST:$WEBROOT/.$id.part/" &&
         ssh "$HOST" "rm -rf '$WEBROOT/$id' && mv '$WEBROOT/.$id.part' '$WEBROOT/$id'"; then
-        printf '%s/%s/' "$SITE" "$id" | wl-copy
+        printf '%s/%s/' "$SITE" "$id" | wl-copy >/dev/null 2>&1
         from=$(cd "$(dirname "$f")" && pwd)
         if [[ $from == "$SHARED" ]]; then
             dest=$f

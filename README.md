@@ -33,7 +33,7 @@ printed in chat and kept in `AutoClipDB.blocked`.
 | --- | --- | --- |
 | `obs-record` | `~/.local/bin/` | OBS over its local websocket: Win + R record (a chime on start and stop, heard over a full-screen game), Win + C clip, Win + M mark, `buffer-on` / `buffer-off` (Battle.net's Lutris pre and post commands), `auto` (this watcher) |
 | `wow-autoclip.path`, `.service` | `~/.config/systemd/user/` | the watcher; `systemctl --user enable --now wow-autoclip.path` |
-| `sdr-copy` | `~/.local/bin/` | Dolphin's "Make SDR copy": an H.264 copy of an HDR clip for Discord |
+| `sdr-copy` | `~/.local/bin/` | Dolphin's "Make SDR copy": an H.264 copy of an HDR clip for Discord, with every sound track kept |
 | `vshare`, `vshare.desktop` | `~/.local/bin/`, `~/.local/share/kio/servicemenus/` | Dolphin's right-click "jackafur.com" menu: **Share** (web copies of a clip: AV1 + HEVC HDR for HDR screens, H.264 SDR for the rest, with an HDR / SDR button, on a page at `/v/<id>/`; link on the clipboard; the clip moves into `~/Videos/OBS/Shared`, so that folder is what's online), **Copy link**, **Take down** (off the site, the clip back to where it came from). Change `HOST`, `WEBROOT` and `SITE` at the top for your own server (uploads over SSH with rsync) |
 
 Before enabling the watcher, change the `PathChanged=` line in `wow-autoclip.path` to your own WoW `Screenshots` folder.
