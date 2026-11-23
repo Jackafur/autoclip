@@ -243,12 +243,20 @@ share() {
 <video controls playsinline preload="metadata" poster="thumb.jpg">$sources</video>
 <p>$title · <button id="mode" hidden></button> <a href="sdr.mp4" download>download</a></p>
 <script>
-// HDR / SDR button: the page picks a copy by the screen when it loads; the button swaps to the other one and keeps your place.
+// HDR / SDR: the HDR copies only where the screen and browser say they show HDR; anywhere else an HDR copy plays washed
+// out and gray (Firefox on Linux with its HDR off, Nov 23), so they are taken out and the SDR one plays, with no button.
+// Where HDR shows, the button swaps to the other copy and keeps your place.
 (function () {
   var v = document.querySelector("video"), b = document.getElementById("mode");
   var sdr = v.querySelector("source:not([data-hdr])").src;
-  var hdr = Array.prototype.find.call(v.querySelectorAll("source[data-hdr]"), function (s) { return v.canPlayType(s.type); });
-  if (!hdr) return;
+  var hdrScreen = !!(window.matchMedia && window.matchMedia("(dynamic-range: high)").matches);
+  var hdr = hdrScreen && Array.prototype.find.call(v.querySelectorAll("source[data-hdr]"), function (s) { return v.canPlayType(s.type); });
+  if (!hdr) {
+    var extra = v.querySelectorAll("source[data-hdr]");
+    Array.prototype.forEach.call(extra, function (s) { s.parentNode.removeChild(s); });
+    if (extra.length) v.load();
+    return;
+  }
   function label() {
     var onHdr = v.currentSrc && v.currentSrc !== sdr;
     b.textContent = onHdr ? "HDR \u2192 switch to SDR" : "SDR \u2192 switch to HDR";
