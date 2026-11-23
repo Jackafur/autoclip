@@ -6,8 +6,9 @@
 #   Take down: off the website, and the video moves back to the folder it came from. Nothing is deleted from the PC.
 # Web copies: an HDR clip (PQ) gets AV1 HDR (Chrome, Edge, Firefox, Discord) + HEVC HDR (Safari, iPhone) for HDR screens and
 # an H.264 SDR one, tone-mapped (SDR screens, Discord's preview); the page has an HDR / SDR button. A normal video: H.264 only.
-# Anyone with the link can watch; nothing lists them; search engines told to stay out (noindex).
-# Terminal: vshare <file>... | vshare link <file>... | vshare down <file>... | vshare list | vshare rm <id>
+# Anyone with the link can watch; search engines told to stay out (noindex). The clips page, https://jackafur.com/v/,
+# lists every shared video, newest first (thumbnail, name, date, length, Copy link); Share and Take down rebuild it.
+# Terminal: vshare <file>... | vshare link <file>... | vshare down <file>... | vshare list | vshare rm <id> | vshare index
 # Upload login: the SSH host alias in HOST below (an account that can write the web root is enough). Log: ~/.local/share/vshare/shared.tsv (id, date,
 # name, the folder it came from); each shared file also carries its id (xattr user.vshare.id).
 # Service menu: ~/.local/share/kio/servicemenus/vshare.desktop. Notes: notebook Projects/Linux PC/CachyOS setup.md, Recording.
@@ -55,7 +56,84 @@ takeDown() { # $1 id, $2 the shared file (may be empty)
     fi
 }
 
+html_escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
+
+# The clips page, $SITE/ (since 2026-11-23, the owner's ask): every video in the log, newest first. Lengths and the HDR
+# tag come from the copies in Shared (a clip whose file is gone just shows without them). Uploaded as index.html beside
+# the clips' folders; a failed upload leaves the old page and says so.
+buildIndex() {
+    local page="$WORK/index.html" cards="" n=0 id when name from f len hdr title day
+    while IFS=$'\t' read -r id when name from; do
+        [[ $id =~ ^[a-zA-Z0-9]{8}$ ]] || continue
+        f="$SHARED/$name" len="" hdr=""
+        if [[ -e $f ]]; then
+            len=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f" 2>/dev/null |
+                awk '{ s = int($1 + 0.5); if (s > 0) printf "%d:%02d", s / 60, s % 60 }')
+            [[ $(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer -of default=nw=1:nk=1 "$f" 2>/dev/null) == smpte2084 ]] && hdr=1
+        fi
+        title=$(printf '%s' "${name%.*}" | html_escape)
+        day=$(date -d "$when" '+%b %-d, %Y' 2>/dev/null || printf '%s' "$when")
+        cards+="<li><a class=\"pic\" href=\"$id/\"><img src=\"$id/thumb.jpg\" alt=\"\"$( ((n >= 8)) && printf ' loading="lazy"')>${len:+<span class=\"len\">$len</span>}${hdr:+<span class=\"hdr\">HDR</span>}</a>"
+        cards+="<div class=\"meta\"><a class=\"t\" href=\"$id/\">$title</a><span class=\"d\">$day</span><button data-link=\"$SITE/$id/\">Copy link</button></div></li>"$'\n'
+        n=$((n + 1))
+    done < <(tac "$LOG")
+    cat >"$page" <<EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Clips</title>
+<style>
+  :root { --bg: #0b0b0c; --card: #161618; --line: #26262a; --text: #eee; --dim: #8a8a90; --accent: #e0a040; }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0 auto; max-width: 1400px; padding: 20px 16px 40px; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, sans-serif; }
+  h1 { margin: 0 0 16px; font-size: 22px; font-weight: 600; }
+  h1 span { color: var(--dim); font-weight: 400; font-size: 15px; margin-left: 8px; }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+  li { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .pic { position: relative; display: block; aspect-ratio: 21 / 9; background: #000; color: #fff; } /* (his clips are ultrawide) */
+  .pic img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .15s; }
+  .pic:hover img { opacity: .85; }
+  .len, .hdr { position: absolute; bottom: 8px; padding: 1px 6px; border-radius: 4px; font-size: 12px; background: rgba(0,0,0,.75); }
+  .len { right: 8px; }
+  .hdr { left: 8px; color: var(--accent); font-weight: 600; }
+  .meta { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 10px 12px 12px; align-items: center; }
+  .t { color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+  .t:hover { text-decoration: underline; }
+  .d { grid-column: 1; color: var(--dim); font-size: 13px; }
+  button { grid-column: 2; grid-row: 1 / span 2; font: inherit; font-size: 13px; color: var(--text); background: #222226; border: 1px solid #3a3a40; border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+  button:hover { background: #2c2c32; }
+  .none { color: var(--dim); }
+</style>
+</head>
+<body>
+<h1>Clips<span>$n</span></h1>
+$( ((n > 0)) && printf '<ul>\n%s</ul>' "$cards" || printf '<p class="none">Nothing shared yet.</p>' )
+<script>
+document.addEventListener("click", function (e) {
+  var b = e.target.closest("button[data-link]");
+  if (!b || !navigator.clipboard) return;
+  navigator.clipboard.writeText(b.dataset.link).then(function () {
+    b.textContent = "Copied";
+    setTimeout(function () { b.textContent = "Copy link"; }, 1500);
+  });
+});
+</script>
+</body>
+</html>
+EOF
+    rsync --chmod=F644 "$page" "$HOST:$WEBROOT/.index.html.part" &&
+        ssh "$HOST" "mv '$WEBROOT/.index.html.part' '$WEBROOT/index.html'" ||
+        { say "Clips page not updated" "The VPS didn't take $SITE/ (the clip itself is fine)."; return 1; }
+}
+
 case "${1:-}" in
+index)
+    buildIndex && echo "$SITE/"
+    exit $? ;;
 list)
     [[ -s $LOG ]] && column -t -s $'\t' "$LOG" || echo "Nothing shared yet."
     exit 0 ;;
@@ -73,6 +151,7 @@ down)
         id=$(idOf "$f") || { say "Not shared: $(basename "$f")" "It isn't on jackafur.com."; continue; }
         takeDown "$id" "$f"
     done
+    buildIndex
     exit 0 ;;
 rm)
     id=${2:-}
@@ -83,15 +162,15 @@ rm)
         n=$(awk -F'\t' -v i="$id" '$1 == i { print $3 }' "$LOG" | tail -1)
         [[ -n $n && -e $SHARED/$n ]] && f="$SHARED/$n"
     fi
-    takeDown "$id" "$f" && echo "Taken down: $SITE/$id/"
+    takeDown "$id" "$f" && echo "Taken down: $SITE/$id/" || exit 1
+    buildIndex
     exit $? ;;
 share)
     shift ;;
 ""|-h|--help)
-    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
-html_escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
 vlevel() { ffprobe -v error -select_streams v:0 -show_entries stream=level -of csv=p=0 "$1" | tr -dc 0-9; }
 VAAPI=(-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi)
 PQ=(-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc)
@@ -214,3 +293,4 @@ EOF
 
 ssh "$HOST" "mkdir -p $WEBROOT" || { say "Share failed" "Couldn't reach the VPS."; exit 1; }
 for f in "$@"; do share "$f"; done
+buildIndex
