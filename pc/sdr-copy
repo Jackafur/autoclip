@@ -9,9 +9,10 @@ for f in "$@"; do
     fi
     out="${f%.*} (SDR).mp4"
     notify-send -a OBS -i com.obsproject.Studio -t 2500 "Making SDR copy: $name"
+    # sidedata delete: drop the HDR mastering labels, or players treat the SDR file as HDR (as vshare since 1.3.2)
     # -map: keep every sound track (OBS's 3 since Nov 21), so "without browser sound" still works on the copy
     if nice ffmpeg -v error -y -i "$f" -map 0:v:0 -map 0:a? \
-        -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=yuv420p" \
+        -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=yuv420p,sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA,sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL" \
         -c:v libx264 -preset medium -crf 18 -c:a copy -movflags +faststart "$out"; then
         notify-send -a OBS -i com.obsproject.Studio "SDR copy done: $(basename "$out")"
     else

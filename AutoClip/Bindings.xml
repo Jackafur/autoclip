@@ -1,0 +1,3 @@
+<Bindings>
+	<Binding name="AUTOCLIP_SAVE" header="AUTOCLIP" category="ADDONS">AutoClip_Save()</Binding>
+</Bindings>

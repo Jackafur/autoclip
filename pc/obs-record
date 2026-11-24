@@ -4,14 +4,16 @@
 stopping a recording also chime (heard over a full-screen game, where the pop-up hides).
 
   obs-record             Win + R: start or stop a recording (OBS closed: start it in the tray, recording)
-  obs-record clip        Win + C: save the last 2 minutes (instant replay); off: turn it on
+  obs-record clip        Win + C: save the last 5 minutes (instant replay) into ~/Videos/OBS/Clips,
+                         kept under CLIPS_CAP_GB (oldest go first); off: turn instant replay on
   obs-record mark        Win + M: chapter marker in the running recording
   obs-record buffer-on   Battle.net starts (Lutris): instant replay on
   obs-record buffer-off  Battle.net closes (Lutris): instant replay off (skipped while Battle.net
                          or WoW still runs: a second launch quits at once and must not turn it off)
-  obs-record auto        the WoW AutoClip watcher (wow-autoclip.path): two screenshots 1.5 s apart
-                         from WoW's addon: move them aside, save the replay into ~/Videos/OBS/Auto,
-                         keep that folder under AUTO_CAP_GB (oldest go first)
+  obs-record auto        the WoW AutoClip watcher (wow-autoclip.path): two screenshots from WoW's
+                         addon: move them aside and save the replay. 1.5 s apart = a kill, level up or
+                         boss: cut to the last AUTO_SECONDS into ~/Videos/OBS/Auto (under AUTO_CAP_GB);
+                         2.6 s apart = your AutoClip key (Alt + C): the whole 5 minutes into Clips, as Win + C
 
 Setup: see AutoClip's README.
 """
@@ -21,6 +23,10 @@ HOST, PORT = "127.0.0.1", 4455
 PWFILE = os.path.expanduser("~/.config/obs-studio/websocket-password")
 AUTO_DIR = os.path.expanduser("~/Videos/OBS/Auto")
 AUTO_CAP_GB = 50
+AUTO_SECONDS = 120  # automatic clips keep the last 2 min of the 5-min instant replay (his "autoclips already does 2 mins")
+CLIPS_DIR = os.path.expanduser("~/Videos/OBS/Clips")  # clips saved by hand, Win + C or Alt + C in WoW (Nov 24)
+CLIPS_CAP_GB = 100
+BY_HAND_GAP = 2.1  # screenshots at least this far apart came from the AutoClip key (2.6 s), not an event (1.5 s)
 SHOT_DIR = os.path.expanduser("~/Games/battlenet/drive_c/Program Files (x86)/World of Warcraft/_forever_/Screenshots")
 OBS_ARGS = ["obs", "--profile", "Recording", "--collection", "Recording",
             "--minimize-to-tray", "--disable-missing-files-check"]
@@ -137,9 +143,9 @@ def obs_running():
     return subprocess.run(["pgrep", "-x", "obs"], capture_output=True).returncode == 0
 
 
-def start_obs(flag):
+def start_obs(*flags):
     subprocess.run(["systemd-run", "--user", "--collect", "--quiet", "--unit=obs-studio",
-                    *OBS_ARGS, flag], check=False)
+                    *OBS_ARGS, *flags], check=False)
 
 
 def wait_until(check):
@@ -172,13 +178,17 @@ def must_connect():
 
 def toggle_record():
     if not obs_running():
-        start_obs("--startrecording")
-        if wait_until(lambda ws: ws.request("GetRecordStatus")["responseData"]["outputActive"]):
-            chime("device-added")
-            notify("● Recording")
-        else:
+        # Start OBS idle, chime, then record, so the chime stays out of the file (--startrecording put it in)
+        start_obs()
+        if not wait_until(lambda ws: True):
             chime("outcome-failure")
-            notify("OBS started but isn't recording. Open it from the tray to see why.")
+            notify("OBS started but can't be reached. Open it from the tray to see why.")
+            return
+        chime("device-added", wait=True)
+        good, why = ok(must_connect().request("StartRecord"))
+        if not good:
+            chime("outcome-failure")
+        notify("● Recording" if good else f"Couldn't start: {why}")
         return
     ws = must_connect()
     if ws.request("GetRecordStatus")["responseData"]["outputActive"]:
@@ -244,6 +254,15 @@ def save_replay(ws):
     return (ev or {}).get("savedReplayPath")
 
 
+def keep_clip(path):
+    """A clip saved by hand: into Clips as "Clip <date>.mp4", that folder kept under CLIPS_CAP_GB."""
+    os.makedirs(CLIPS_DIR, exist_ok=True)
+    name = "Clip " + os.path.basename(path).split(" ", 1)[-1]
+    os.replace(path, os.path.join(CLIPS_DIR, name))
+    cull(CLIPS_DIR, "Clip ", CLIPS_CAP_GB)
+    return name
+
+
 def clip():
     if not obs_running():
         buffer_on()
@@ -254,7 +273,7 @@ def clip():
         return
     path = save_replay(ws)
     if path:
-        notify(f"Clip saved (last 2 min): {os.path.basename(path)}")
+        notify(f"Clip saved: {keep_clip(path)}")
 
 
 def mark():
@@ -269,26 +288,46 @@ def mark():
     notify("◆ Marked" if good else f"Couldn't mark: {why}")
 
 
-def cull():
-    files = sorted((os.path.join(AUTO_DIR, f) for f in os.listdir(AUTO_DIR) if f.startswith("Auto ")),
+def cull(folder, prefix, cap_gb):
+    files = sorted((os.path.join(folder, f) for f in os.listdir(folder) if f.startswith(prefix)),
                    key=os.path.getmtime)
     total = sum(os.path.getsize(f) for f in files)
-    while files and total > AUTO_CAP_GB * 1024 ** 3:
+    while files and total > cap_gb * 1024 ** 3:
         f = files.pop(0)
         total -= os.path.getsize(f)
         os.remove(f)
 
 
 def marker_pair():
-    """WoW's AutoClip takes two screenshots 1.5 s apart; your own come one at a time.
-    Returns the pair (newest two, 0.8 to 3 s apart, made in the last 10 s) or None."""
+    """WoW's AutoClip takes two screenshots 1.5 s apart (2.6 s for its key); your own come one at a time.
+    Returns the pair and their gap (newest two, 0.8 to 3 s apart, made in the last 10 s) or None."""
     shots = [f for ext in ("jpg", "tga", "png") for f in glob.glob(os.path.join(SHOT_DIR, "*." + ext))]
     recent = sorted((f for f in shots if time.time() - os.path.getmtime(f) < 10), key=os.path.getmtime)
     if len(recent) >= 2:
         a, b = recent[-2:]
-        if 0.8 <= os.path.getmtime(b) - os.path.getmtime(a) <= 3:
-            return a, b
+        gap = os.path.getmtime(b) - os.path.getmtime(a)
+        if 0.8 <= gap <= 3:
+            return a, b, gap
     return None
+
+
+def trim(path, seconds):
+    """Keeps the last `seconds` of a clip, copied as it is (no re-encoding). Left whole if shorter or if ffmpeg fails."""
+    try:
+        length = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                                      capture_output=True, text=True, timeout=30).stdout.strip())
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        return
+    if length <= seconds + 5:
+        return
+    tmp = path + ".cut.mp4"
+    r = subprocess.run(["nice", "ffmpeg", "-v", "error", "-y", "-sseof", f"-{seconds}", "-i", path,
+                        "-map", "0:v", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", tmp],
+                       capture_output=True, timeout=300)
+    if r.returncode == 0 and os.path.getsize(tmp) > 0:
+        os.replace(tmp, path)
+    elif os.path.exists(tmp):
+        os.remove(tmp)
 
 
 def auto():
@@ -301,7 +340,8 @@ def auto():
     # Moved aside, not deleted, in case one was yours: the last 6 stay in ~/.cache/wow-autoclip.
     keep = os.path.expanduser("~/.cache/wow-autoclip")
     os.makedirs(keep, exist_ok=True)
-    for f in pair:
+    by_hand = pair[2] >= BY_HAND_GAP
+    for f in pair[:2]:
         os.replace(f, os.path.join(keep, os.path.basename(f)))
     for f in sorted(glob.glob(os.path.join(keep, "*")), key=os.path.getmtime)[:-6]:
         os.remove(f)
@@ -315,10 +355,15 @@ def auto():
     path = save_replay(ws)
     if not path:
         return
+    if by_hand:
+        notify(f"Clip saved: {keep_clip(path)}")
+        return
     os.makedirs(AUTO_DIR, exist_ok=True)
     name = "Auto " + os.path.basename(path).split(" ", 1)[-1]
-    os.replace(path, os.path.join(AUTO_DIR, name))
-    cull()
+    dest = os.path.join(AUTO_DIR, name)
+    os.replace(path, dest)
+    trim(dest, AUTO_SECONDS)
+    cull(AUTO_DIR, "Auto ", AUTO_CAP_GB)
     notify(f"WoW clip saved: {name}")
 
 

@@ -12,6 +12,11 @@ WoW under Lutris, OBS 30+ with instant replay and its websocket on); tested on t
 /autoclip test       make a clip now (8 s from now)
 ```
 
+Your own key: Esc, Options, Keybindings, AddOns, AutoClip, **Save a clip (the last 5 minutes)**. It saves right away, no wait,
+the whole 5 minutes into `~/Videos/OBS/Clips` (like Win + C; kept under 100 GB). Automatic clips keep the last 2 minutes
+in `~/Videos/OBS/Auto` (kept under 50 GB). The PC tells them apart by the gap between the two screenshots (2.6 s for the
+key, 1.5 s for an event). Instant replay is 5 minutes for this (OBS, Output, Replay Buffer).
+
 ## How it works
 
 An addon can't talk to OBS, so AutoClip waits 8 s after the moment (so the clip shows what came right after) and takes

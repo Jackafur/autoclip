@@ -202,8 +202,8 @@ share() {
             -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=yuv420p,sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA,sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL" \
             -c:v libx264 -preset faster -crf 18 -maxrate 35M -bufsize 70M "${AUDIO[@]}" "$dir/sdr.mp4" 2> >(grep -v 'radv is not a conformant' >&2) ||
             { say "Share failed: $name" "A copy didn't encode. Nothing was uploaded."; rm -rf "$dir"; return 1; }
-        sources+="<source data-hdr media=\"(dynamic-range: high)\" src=\"hdr-av1.mp4\" type='video/mp4; codecs=\"$(printf 'av01.0.%02dM.10' "$(vlevel "$dir/hdr-av1.mp4")")\"'>"
-        sources+="<source data-hdr media=\"(dynamic-range: high)\" src=\"hdr-hevc.mp4\" type='video/mp4; codecs=\"hvc1.2.4.L$(vlevel "$dir/hdr-hevc.mp4").B0\"'>"
+        sources+="<source data-hdr media=\"(dynamic-range: high), (video-dynamic-range: high)\" src=\"hdr-av1.mp4\" type='video/mp4; codecs=\"$(printf 'av01.0.%02dM.10' "$(vlevel "$dir/hdr-av1.mp4")")\"'>"
+        sources+="<source data-hdr media=\"(dynamic-range: high), (video-dynamic-range: high)\" src=\"hdr-hevc.mp4\" type='video/mp4; codecs=\"hvc1.2.4.L$(vlevel "$dir/hdr-hevc.mp4").B0\"'>"
     else
         nice ffmpeg -v error -y -i "$f" -vf "format=yuv420p" -c:v libx264 -preset faster -crf 18 -maxrate 35M -bufsize 70M "${AUDIO[@]}" "$dir/sdr.mp4" ||
             { say "Share failed: $name" "The copy didn't encode. Nothing was uploaded."; rm -rf "$dir"; return 1; }
@@ -249,11 +249,13 @@ share() {
 <script>
 // HDR / SDR: the HDR copies only where the screen and browser say they show HDR; anywhere else an HDR copy plays washed
 // out and gray (Firefox on Linux with its HDR off, Nov 23), so they are taken out and the SDR one plays, with no button.
+// Two questions, either yes counts: Firefox answers "dynamic-range: high" with no on every system and says it can show
+// HDR video through "video-dynamic-range: high" (Nov 23: asking only the first hid the HDR copies from Firefox).
 // Where HDR shows, the button swaps to the other copy and keeps your place.
 (function () {
   var v = document.querySelector("video"), b = document.getElementById("mode");
   var sdr = v.querySelector("source:not([data-hdr])").src;
-  var hdrScreen = !!(window.matchMedia && window.matchMedia("(dynamic-range: high)").matches);
+  var hdrScreen = !!(window.matchMedia && window.matchMedia("(dynamic-range: high), (video-dynamic-range: high)").matches);
   var hdr = hdrScreen && Array.prototype.find.call(v.querySelectorAll("source[data-hdr]"), function (s) { return v.canPlayType(s.type); });
   if (!hdr) {
     var extra = v.querySelectorAll("source[data-hdr]");

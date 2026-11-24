@@ -15,12 +15,23 @@ local f = CreateFrame("Frame")
 
 local function say(msg) print("|cffbd93f9AutoClip|r " .. msg) end
 
-local function shoot()
+local GAP, GAP_KEY = 1.5, 2.6 -- seconds between the two shots: an event, or your key (the PC keeps those in Clips, whole)
+local function shoot(gap)
     Screenshot()
-    C_Timer.After(1.5, function()
+    C_Timer.After(gap or GAP, function()
         Screenshot()
         pending = false
     end)
+end
+
+-- Your own key (Esc, Options, Keybindings, AddOns, AutoClip): saves the last 5 min now, no wait, into ~/Videos/OBS/Clips.
+BINDING_HEADER_AUTOCLIP = "AutoClip"
+BINDING_NAME_AUTOCLIP_SAVE = "AutoClip - Save a clip (the last 5 minutes)"
+function AutoClip_Save()
+    if pending then say("a clip is already on its way") return end
+    pending = true
+    say("saving the last 5 min")
+    shoot(GAP_KEY)
 end
 
 local function want(kind)
@@ -86,7 +97,7 @@ SlashCmdList.AUTOCLIP = function(msg)
     if kind and DEFAULTS[kind] ~= nil then
         AutoClipDB[kind] = not AutoClipDB[kind]
     end
-    say("clips the last 2 min on (/autoclip <word> turns one on or off, /autoclip test makes one now):")
+    say("clips the last 2 min on (/autoclip <word> turns one on or off, /autoclip test makes one now; your own key: Keybindings, AddOns, AutoClip):")
     for _, k in ipairs(ORDER) do
         say(("  %s: %s  (%s)"):format(k, AutoClipDB[k] and "|cff50fa7bon|r" or "|cffff5555off|r", LABELS[k]))
     end
