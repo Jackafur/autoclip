@@ -1,0 +1,70 @@
+--- a/src/vkcapture.c
++++ b/src/vkcapture.c
+@@ -67,6 +67,7 @@
+ 
+ typedef struct {
+     int id;
++    int pid; // follow_pid patch: the game's process id (SO_PEERCRED)
+     int sockfd;
+     int activated;
+     int buf_id;
+@@ -103,6 +104,7 @@
+     bool window_match;
+     bool window_exclude;
+     const char *window;
++    int follow_pid; // follow_pid patch: film the game with this process id while it is hooked
+ 
+     int buf_id;
+     int client_id;
+@@ -341,6 +343,7 @@
+     if (!strlen(ctx->window)) {
+         ctx->window = NULL;
+     }
++    ctx->follow_pid = (int)obs_data_get_int(settings, "follow_pid");
+ }
+ 
+ static void *vkcapture_source_create(obs_data_t *settings, obs_source_t *source)
+@@ -367,6 +370,13 @@
+ static vkcapture_client_t *find_matching_client(vkcapture_source_t *ctx)
+ {
+     vkcapture_client_t *client = NULL;
++    if (ctx->follow_pid) {
++        for (size_t i = 0; i < server.clients.num; i++) {
++            if (server.clients.array[i].pid == ctx->follow_pid) {
++                return server.clients.array + i;
++            }
++        }
++    }
+     if (ctx->window) {
+         for (size_t i = server.clients.num; i > 0; i--) {
+             vkcapture_client_t *c = server.clients.array + i - 1;
+@@ -964,15 +974,16 @@
+                 memset(&client.buf_fds, -1, sizeof(client.buf_fds));
+                 client.id = ++clientid;
+                 client.sockfd = clientfd;
+-                pthread_mutex_lock(&server.mutex);
+-                da_push_back(server.clients, &client);
+-                pthread_mutex_unlock(&server.mutex);
+-                server_add_fd(client.sockfd, POLLIN);
+                 struct ucred cred = {0};
+                 socklen_t cred_len = sizeof(cred);
+                 if (getsockopt(client.sockfd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) != 0) {
+                     blog(LOG_WARNING, "Failed to get socket credentials: %s", strerror(errno));
+                 }
++                client.pid = cred.pid;
++                pthread_mutex_lock(&server.mutex);
++                da_push_back(server.clients, &client);
++                pthread_mutex_unlock(&server.mutex);
++                server_add_fd(client.sockfd, POLLIN);
+                 blog(LOG_INFO, "Client %d connected (pid=%d)", client.id, cred.pid);
+             } else {
+                 if (errno != EAGAIN && errno != EWOULDBLOCK && errno != ECONNABORTED) {
+@@ -1106,7 +1117,7 @@
+     pthread_setname_np(server.thread, PLUGIN_NAME);
+ 
+     obs_register_source(&vkcapture_input);
+-    blog(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
++    blog(LOG_INFO, "plugin loaded successfully (version %s, follow_pid patch)", PLUGIN_VERSION);
+ 
+     return true;
+ }

@@ -1,0 +1,11 @@
+{
+    "KPlugin": {
+        "Authors": [{ "Name": "Jackafur" }],
+        "Description": "Two WoW clients: OBS films the one you are in, not just the one started last",
+        "Id": "jackwowfollow",
+        "Name": "OBS follows your WoW",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "KWin/Script",
+    "X-Plasma-API": "javascript"
+}

@@ -12,22 +12,30 @@ stopping a recording also chime (heard over a full-screen game, where the pop-up
                          or WoW still runs: a second launch quits at once and must not turn it off)
   obs-record auto        the WoW AutoClip watcher (wow-autoclip.path): two screenshots from WoW's
                          addon: move them aside and save the replay. 1.5 s apart = a kill, level up or
-                         boss: cut to the last AUTO_SECONDS into ~/Videos/OBS/Auto (under AUTO_CAP_GB);
+                         boss: AUTO_SECONDS of it, ending AUTO_TRIM_END before the save, into ~/Videos/OBS/Auto (under AUTO_CAP_GB);
                          2.6 s apart = your AutoClip key (Alt + C): the whole 5 minutes into Clips, as Win + C
+  obs-record follow PID  the KWin script jackwowfollow (two WoWs open): film the WoW of process PID, the one you
+                         are in. With the patched obs-vkcapture (follow_pid patch, in the OBS log) the game layer
+                         films it, in HDR. Without the patch (an update put the stock one back) the game layer films
+                         only the WoW started last, so in another WoW the screen layer films instead (SDR).
+                         PID 0 = you left WoW (stock: back to the game layer). PID_late = the same after 5 s.
 
 Setup: see AutoClip's README.
 """
-import base64, glob, hashlib, json, os, socket, struct, subprocess, sys, time
+import base64, glob, hashlib, json, os, re, socket, struct, subprocess, sys, time
 
 HOST, PORT = "127.0.0.1", 4455
 PWFILE = os.path.expanduser("~/.config/obs-studio/websocket-password")
 AUTO_DIR = os.path.expanduser("~/Videos/OBS/Auto")
 AUTO_CAP_GB = 50
 AUTO_SECONDS = 120  # automatic clips keep the last 2 min of the 5-min instant replay (his "autoclips already does 2 mins")
+AUTO_TRIM_END = 3.5  # and lose their last 3.5 s: WoW's "Screen Captured" text shows from 2.9 s before the save (0 = the old way)
 CLIPS_DIR = os.path.expanduser("~/Videos/OBS/Clips")  # clips saved by hand, Win + C or Alt + C in WoW (Nov 24)
 CLIPS_CAP_GB = 100
 BY_HAND_GAP = 2.1  # screenshots at least this far apart came from the AutoClip key (2.6 s), not an event (1.5 s)
 SHOT_DIR = os.path.expanduser("~/Games/battlenet/drive_c/Program Files (x86)/World of Warcraft/_forever_/Screenshots")
+SCENE, GAME_LAYER, SCREEN_LAYER = "Game", "Game (HDR)", "Screen (ultrawide)"
+OBS_LOGS = os.path.expanduser("~/.config/obs-studio/logs")
 OBS_ARGS = ["obs", "--profile", "Recording", "--collection", "Recording",
             "--minimize-to-tray", "--disable-missing-files-check"]
 
@@ -210,10 +218,15 @@ def buffer_on(quiet=False):
         start_obs("--startreplaybuffer")
         if wait_until(buffer_active):
             notify("Instant replay on: Win + C saves the last 2 minutes")
+            try:
+                set_layers(connect(), screen=False)
+            except (OSError, ConnectionError, KeyError, ValueError):
+                pass
         else:
             notify("OBS started but instant replay isn't on. Open it from the tray to see why.")
         return False
     ws = must_connect()
+    set_layers(ws, screen=False)  # a new game session starts on the game layer (follow may have left the screen on)
     if buffer_active(ws):
         return True
     good, why = ok(ws.request("StartReplayBuffer"))
@@ -311,20 +324,34 @@ def marker_pair():
     return None
 
 
-def trim(path, seconds):
-    """Keeps the last `seconds` of a clip, copied as it is (no re-encoding). Left whole if shorter or if ffmpeg fails."""
+def trim(path, seconds, drop_end=0):
+    """Keeps `seconds` of a clip, ending `drop_end` s before its end, copied as it is (no re-encoding).
+    A shorter clip only loses its end. Left whole if it is too short to cut (under drop_end + 5 s), if nothing
+    needs cutting, or if ffmpeg fails, hangs or writes something that is not the length asked for."""
+    def probe(p):
+        return float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", p],
+                                    capture_output=True, text=True, timeout=30).stdout.strip())
     try:
-        length = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
-                                      capture_output=True, text=True, timeout=30).stdout.strip())
+        length = probe(path)
     except (ValueError, OSError, subprocess.TimeoutExpired):
         return
-    if length <= seconds + 5:
+    if length > seconds + drop_end + 5:
+        start = ["-sseof", f"-{seconds + drop_end}"]
+        keep = seconds
+    elif drop_end and length > drop_end + 5:
+        start = []
+        keep = length - drop_end
+    else:
         return
     tmp = path + ".cut.mp4"
-    r = subprocess.run(["nice", "ffmpeg", "-v", "error", "-y", "-sseof", f"-{seconds}", "-i", path,
-                        "-map", "0:v", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", tmp],
-                       capture_output=True, timeout=300)
-    if r.returncode == 0 and os.path.getsize(tmp) > 0:
+    try:
+        r = subprocess.run(["nice", "ffmpeg", "-v", "error", "-y", *start, "-i", path, "-t", f"{keep:.3f}",
+                            "-map", "0:v", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", tmp],
+                           capture_output=True, timeout=300)
+        good = r.returncode == 0 and abs(probe(tmp) - keep) <= 3  # the cut must be the length asked for
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        good = False
+    if good:
         os.replace(tmp, path)
     elif os.path.exists(tmp):
         os.remove(tmp)
@@ -362,15 +389,77 @@ def auto():
     name = "Auto " + os.path.basename(path).split(" ", 1)[-1]
     dest = os.path.join(AUTO_DIR, name)
     os.replace(path, dest)
-    trim(dest, AUTO_SECONDS)
+    trim(dest, AUTO_SECONDS, AUTO_TRIM_END)
     cull(AUTO_DIR, "Auto ", AUTO_CAP_GB)
     notify(f"WoW clip saved: {name}")
+
+
+def obs_log():
+    logs = glob.glob(os.path.join(OBS_LOGS, "*.txt"))
+    return max(logs, key=os.path.getmtime) if logs else None
+
+
+def vk_clients():
+    """Process ids of the games obs-vkcapture has hooked, oldest first, from OBS's own log.
+    The game layer ("capture any window") films the last of them: the one started last."""
+    log = obs_log()
+    if not log:
+        return []
+    alive = {}
+    with open(log, errors="replace") as f:
+        for line in f:
+            m = re.search(r"\[linux-vkcapture\] Client (\d+) (connected \(pid=(\d+)\)|disconnected)", line)
+            if m and m.group(3):
+                alive[m.group(1)] = int(m.group(3))
+            elif m:
+                alive.pop(m.group(1), None)
+    return list(alive.values())  # dicts keep the order they were filled in: oldest connection first
+
+
+def set_layers(ws, screen):
+    """screen=False: the game layer films (HDR), screen layer off (the normal way).
+    screen=True: game layer off, the ultrawide's screen layer films whatever is on it (SDR)."""
+    items = ws.request("GetSceneItemList", {"sceneName": SCENE}).get("responseData", {}).get("sceneItems", [])
+    for it in items:
+        want = {GAME_LAYER: not screen, SCREEN_LAYER: screen}.get(it["sourceName"])
+        if want is not None and it["sceneItemEnabled"] != want:
+            ws.request("SetSceneItemEnabled", {"sceneName": SCENE, "sceneItemId": it["sceneItemId"],
+                                               "sceneItemEnabled": want})
+
+
+def follow():
+    arg = sys.argv[2] if len(sys.argv) > 2 else "0"
+    pid, late = arg.split("_")[0], arg.endswith("_late")
+    pid = int(pid) if pid.isdigit() else 0
+    if late:
+        time.sleep(5)  # a WoW just closed: give OBS time to log its disconnect
+    if not obs_running():
+        return
+    games = vk_clients()
+    log = obs_log()
+    patched = bool(log) and "follow_pid patch" in open(log, errors="replace").read(200000)
+    try:
+        ws = connect()
+        if patched:
+            set_layers(ws, screen=False)
+            if pid:  # 0 (left WoW): keep filming the last WoW you were in
+                ws.request("SetInputSettings", {"inputName": GAME_LAYER, "inputSettings": {"follow_pid": pid},
+                                                "overlay": True})
+            print(f"follow {arg}: games hooked {games} -> game layer films pid {pid or 'as before'} (HDR)")
+            return
+        # Stock plugin: in a WoW that isn't the one the game layer films (or one OBS never logged): film the screen
+        screen = pid != 0 and len(games) >= 2 and pid != games[-1]
+        set_layers(ws, screen)
+    except (OSError, ConnectionError, KeyError, ValueError) as e:
+        print(f"follow {arg}: can't reach OBS ({e})")
+        return
+    print(f"follow {arg}: games hooked {games} -> {'screen layer' if screen else 'game layer'} (no patch)")
 
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "record"
     {"record": toggle_record, "clip": clip, "mark": mark, "buffer-on": buffer_on,
-     "buffer-off": buffer_off, "auto": auto}[cmd]()
+     "buffer-off": buffer_off, "auto": auto, "follow": follow}[cmd]()
 
 
 if __name__ == "__main__":

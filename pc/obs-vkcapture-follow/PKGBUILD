@@ -1,0 +1,30 @@
+# obs-vkcapture 1.5.6 with the follow_pid patch (Nov 26): the game layer can be told which game to film by
+# its process id (the "follow_pid" setting), so with two WoWs open OBS films the one you are in, in HDR.
+# Set by `obs-record follow <pid>` from the KWin script jackwowfollow. Same files as the CachyOS package.
+pkgname=obs-vkcapture
+pkgver=1.5.6
+pkgrel=3.1
+pkgdesc="OBS Linux Vulkan/OpenGL game capture (with the follow_pid patch)"
+arch=('x86_64')
+url="https://github.com/nowrep/obs-vkcapture"
+license=('GPL-2.0-only')
+depends=('vulkan-icd-loader' 'libgl' 'libegl')
+makedepends=('cmake' 'obs-studio' 'vulkan-headers' 'wayland' 'libxcb' 'libdrm')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/nowrep/obs-vkcapture/archive/refs/tags/v$pkgver.tar.gz"
+        "follow-pid.patch")
+sha256sums=('4f0eecd574cf4765bf8a4c5e09b7c764d1c4a9128e6c6fea99e2c6474c494fe0'
+            'SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  patch -p1 < "$srcdir/follow-pid.patch"
+}
+
+build() {
+  cmake -B build -S "$pkgname-$pkgver" -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release -Wno-dev
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+}

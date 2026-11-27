@@ -8,19 +8,42 @@
 local DEFAULTS = { pvp = true, level = true, boss = true, death = false }
 local LABELS = { pvp = "PvP kill (an honorable kill, or your killing blow on a player)", level = "level up", boss = "boss kill", death = "your death" }
 local ORDER = { "pvp", "level", "boss", "death" }
-local AFTER = 8 -- seconds to wait after the moment, so the clip shows what came right after
+-- Seconds to wait after the moment, so the clip shows what came right after. 12 since Nov 26 (was 8): the PC cuts the
+-- last 3.5 s off each automatic clip, where WoW's "Screen Captured" text sits. /autoclip wait 8 = the old wait.
+-- Not under 8: the PC is busy for up to 8 s cutting a clip, and screenshots that land meanwhile are not seen.
+local AFTER_DEFAULT, AFTER_MIN, AFTER_MAX = 12, 8, 30
+-- A clip ends about half a second before its first screenshot. A moment in the last LATE seconds before that, or
+-- during the two screenshots, would be cut off or missing, so it gets a clip of its own once this one is done.
+local LATE = 4
+local function after()
+    local n = AutoClipDB and tonumber(AutoClipDB.after)
+    if n and n >= AFTER_MIN and n <= AFTER_MAX then return n end
+    return AFTER_DEFAULT
+end
 
 local pending = false
+local lateAt, again, byKey = 0, false, false -- from lateAt on, a moment no longer fits the clip on its way
 local f = CreateFrame("Frame")
 
 local function say(msg) print("|cffbd93f9AutoClip|r " .. msg) end
 
 local GAP, GAP_KEY = 1.5, 2.6 -- seconds between the two shots: an event, or your key (the PC keeps those in Clips, whole)
-local function shoot(gap)
+local shoot
+local function wait()
+    pending = true
+    byKey = false
+    lateAt = GetTime() + after() - LATE
+    C_Timer.After(after(), function() shoot() end)
+end
+shoot = function(gap)
     Screenshot()
     C_Timer.After(gap or GAP, function()
         Screenshot()
         pending = false
+        if again then
+            again = false
+            wait()
+        end
     end)
 end
 
@@ -28,16 +51,25 @@ end
 BINDING_HEADER_AUTOCLIP = "AutoClip"
 BINDING_NAME_AUTOCLIP_SAVE = "AutoClip - Save a clip (the last 5 minutes)"
 function AutoClip_Save()
-    if pending then say("a clip is already on its way") return end
+    if pending then
+        if not byKey and GetTime() >= lateAt then again = true end -- a second press of the key asks for nothing more
+        say("a clip is already on its way")
+        return
+    end
     pending = true
+    byKey = true
+    lateAt = GetTime()
     say("saving the last 5 min")
     shoot(GAP_KEY)
 end
 
 local function want(kind)
-    if not AutoClipDB[kind] or pending then return end
-    pending = true
-    C_Timer.After(AFTER, shoot)
+    if not AutoClipDB[kind] then return end
+    if pending then
+        if GetTime() >= lateAt then again = true end
+        return
+    end
+    wait()
 end
 
 f:RegisterEvent("ADDON_LOADED")
@@ -89,9 +121,18 @@ SlashCmdList.AUTOCLIP = function(msg)
     local kind = (msg or ""):lower():match("%a+")
     if kind == "test" then
         if pending then return end
-        say("test clip in " .. AFTER .. " s")
-        pending = true
-        C_Timer.After(AFTER, shoot)
+        say("test clip in " .. after() .. " s")
+        wait()
+        return
+    end
+    if kind == "wait" then
+        local n = tonumber((msg or ""):match("%d+"))
+        if n and n >= AFTER_MIN and n <= AFTER_MAX then
+            AutoClipDB.after = n
+        elseif n then
+            say(("wait: %d to %d seconds"):format(AFTER_MIN, AFTER_MAX))
+        end
+        say(("waits %d s after the moment (/autoclip wait <seconds>, %d to %d; %d is the usual)"):format(after(), AFTER_MIN, AFTER_MAX, AFTER_DEFAULT))
         return
     end
     if kind and DEFAULTS[kind] ~= nil then
@@ -101,4 +142,5 @@ SlashCmdList.AUTOCLIP = function(msg)
     for _, k in ipairs(ORDER) do
         say(("  %s: %s  (%s)"):format(k, AutoClipDB[k] and "|cff50fa7bon|r" or "|cffff5555off|r", LABELS[k]))
     end
+    say(("  waits %d s after the moment (/autoclip wait <seconds>)"):format(after()))
 end
